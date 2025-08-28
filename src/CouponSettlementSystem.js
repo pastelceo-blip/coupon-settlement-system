@@ -1,10 +1,9 @@
- 
 import React, { useState, useEffect } from 'react';
 import { Calendar, Send, Check, AlertCircle, Eye, Trash2, ArrowRight, ArrowLeft, Filter, Users, CreditCard, Upload, FileSpreadsheet, Heart } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 const CouponSettlementSystem = () => {
-  const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)); // 현재 년-월로 초기화
+  const [selectedMonth, setSelectedMonth] = useState('');
   const [data, setData] = useState([]);
   const [fileName, setFileName] = useState('');
   const [isFileUploaded, setIsFileUploaded] = useState(false);
@@ -338,6 +337,18 @@ const CouponSettlementSystem = () => {
       return customer.babyName;
     }
   };
+// 업체별 연락처 매핑
+const getRecipientPhone = (couponCode) => {
+  const phoneMapping = {
+    '기흥시엠프레': '01066686812',
+  };
+  return phoneMapping[couponCode] || '01000000000';
+};
+
+// 솔라피 알림톡 발송 함수
+const sendKakaoMessages = async () => {
+  // 위에서 제공한 발송 함수 코드
+};
 
   // 4단계: 알림톡 메시지 생성
   const generateMessages = () => {
@@ -511,14 +522,11 @@ ${selectedCustomers.map((customer) =>
                   type="month"
                   value={selectedMonth}
                   onChange={(e) => setSelectedMonth(e.target.value)}
-                  min="2020-01"
-                  max="2030-12"
-                  placeholder="년-월 선택"
                   className={`px-4 py-3 border-2 ${fileType === 'wedding' ? 'border-pink-200 focus:border-pink-500' : 'border-blue-200 focus:border-blue-500'} rounded-xl focus:outline-none transition-colors bg-white/50 backdrop-blur-sm text-lg font-medium`}
                 />
                 <button
                   onClick={filterByMonth}
-                  disabled={!selectedMonth || selectedMonth.length < 7}
+                  disabled={!selectedMonth}
                   className={`px-8 py-3 bg-gradient-to-r ${getSystemColor()} text-white font-semibold rounded-xl hover:opacity-90 disabled:from-gray-300 disabled:to-gray-400 transition-all duration-200 flex items-center gap-2 shadow-lg hover:shadow-xl disabled:shadow-none transform hover:scale-105 disabled:scale-100`}
                 >
                   <span>다음 단계</span>
