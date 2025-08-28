@@ -1,6 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Send, Check, AlertCircle, Eye, Trash2, ArrowRight, ArrowLeft, Filter, Users, CreditCard, Upload, FileSpreadsheet, Heart } from 'lucide-react';
+import { Calendar, Check, AlertCircle, Eye, ArrowRight, ArrowLeft, Filter, Users, CreditCard, Upload, FileSpreadsheet, Heart, Download, Database } from 'lucide-react';
 import * as XLSX from 'xlsx';
+
+// Firebase 설정 (환경변수에서 가져오기)
+const firebaseConfig = {
+  apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
+  authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.REACT_APP_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.REACT_APP_FIREBASE_APP_ID
+};
 
 const CouponSettlementSystem = () => {
   const [selectedMonth, setSelectedMonth] = useState('');
@@ -17,7 +27,120 @@ const CouponSettlementSystem = () => {
   const [showDuplicatesOnly, setShowDuplicatesOnly] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
   const [messages, setMessages] = useState([]);
-  const [isApproved, setIsApproved] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState('');
+
+  // Firebase 초기화
+  const initializeFirebase = async () => {
+    console.log('=== Firebase 초기화 시작 ===');
+    console.log('API Key:', firebaseConfig.apiKey ? '설정됨' : '없음');
+    console.log('Project ID:', firebaseConfig.projectId);
+    
+    if (!firebaseConfig.apiKey) {
+      console.log('Firebase 설정이 없습니다.');
+      return null;
+    }
+
+    try {
+      // Firebase 라이브러리가 설치되어 있는지 확인
+      console.log('Firebase 라이브러리 로드 시도...');
+      const { initializeApp } = await import('firebase/app');
+      const { getFirestore } = await import('firebase/firestore');
+      
+      console.log('Firebase 앱 초기화 중...');
+      const app = initializeApp(firebaseConfig);
+      const db = getFirestore(app);
+      console.log('Firebase 초기화 성공!');
+      return db;
+    } catch (error) {
+      console.error('Firebase 초기화 오류:', error);
+      alert(`Firebase 초기화 실패: ${error.message}`);
+      return null;
+    }
+  };
+
+  // Firebase에 정산 데이터 저장
+  const saveToFirebase = async () => {
+    console.log('=== Firebase 저장 시작 ===');
+    console.log('저장할 메시지 개수:', messages.length);
+    
+    if (!messages.length) {
+      alert('저장할 데이터가 없습니다.');
+      return;
+    }
+
+    setIsSaving(true);
+    setSaveStatus('데이터 저장 중...');
+
+    try {
+      console.log('Firebase 초기화 시도...');
+      const db = await initializeFirebase();
+      if (!db) {
+        throw new Error('Firebase 초기화에 실패했습니다.');
+      }
+
+      console.log('Firestore 함수 로드 중...');
+      const { collection, addDoc, serverTimestamp } = await import('firebase/firestore');
+      
+      console.log('데이터 저장 시작...');
+      const results = [];
+      
+      // 각 업체별 정산 내역을 저장
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i];
+        console.log(`${i + 1}/${messages.length} - ${msg.couponCode} 저장 중...`);
+        
+        const settlementData = {
+          업체명: msg.couponCode,
+          합계금액: msg.totalAmount,
+          입금내역: msg.message,
+          정산월: selectedMonth,
+          건수: msg.totalCount,
+          파일타입: fileType,
+          생성일시: serverTimestamp(),
+          상태: '미입금'
+        };
+
+        console.log('저장할 데이터:', settlementData);
+
+        try {
+          const docRef = await addDoc(collection(db, 'settlements'), settlementData);
+          console.log(`${msg.couponCode} 저장 성공, Document ID:`, docRef.id);
+          results.push({ couponCode: msg.couponCode, success: true, id: docRef.id });
+        } catch (docError) {
+          console.error(`${msg.couponCode} 저장 실패:`, docError);
+          results.push({ couponCode: msg.couponCode, success: false, error: docError.message });
+        }
+      }
+
+      const successCount = results.filter(r => r.success).length;
+      const failCount = results.filter(r => !r.success).length;
+      
+      console.log('=== 저장 결과 ===');
+      console.log('성공:', successCount);
+      console.log('실패:', failCount);
+      console.log('상세 결과:', results);
+
+      if (failCount > 0) {
+        const failedCompanies = results.filter(r => !r.success).map(r => r.couponCode).join(', ');
+        setSaveStatus(`일부 저장 실패: 성공 ${successCount}건, 실패 ${failCount}건 (${failedCompanies})`);
+      } else {
+        setSaveStatus(`${successCount}개 업체 데이터가 성공적으로 저장되었습니다!`);
+      }
+      
+      setTimeout(() => setSaveStatus(''), 5000);
+      
+    } catch (error) {
+      console.error('=== Firebase 저장 오류 ===');
+      console.error('오류 메시지:', error.message);
+      console.error('오류 스택:', error.stack);
+      
+      setSaveStatus(`저장 실패: ${error.message}`);
+      setTimeout(() => setSaveStatus(''), 5000);
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   // 컴포넌트 마운트 시 기본 엑셀 파일 읽기 시도
   useEffect(() => {
@@ -93,7 +216,6 @@ const CouponSettlementSystem = () => {
       setDuplicateItems([]);
       setSelectedItems({});
       setMessages([]);
-      setIsApproved(false);
       setCurrentStep(1);
       
     } catch (error) {
@@ -337,20 +459,8 @@ const CouponSettlementSystem = () => {
       return customer.babyName;
     }
   };
-// 업체별 연락처 매핑
-const getRecipientPhone = (couponCode) => {
-  const phoneMapping = {
-    '기흥시엠프레': '01066686812',
-  };
-  return phoneMapping[couponCode] || '01000000000';
-};
 
-// 솔라피 알림톡 발송 함수
-const sendKakaoMessages = async () => {
-  // 위에서 제공한 발송 함수 코드
-};
-
-  // 4단계: 알림톡 메시지 생성
+  // 4단계: 정산 메시지 생성
   const generateMessages = () => {
     const messageList = [];
     
@@ -363,14 +473,17 @@ const sendKakaoMessages = async () => {
         const totalAmount = selectedCustomers.length * 5000;
         
         const serviceType = fileType === 'wedding' ? '웨딩영상' : '돌잔치영상';
-        const message = `안녕하세요. 파스텔무비입니다. 건별 정산내용 보내드립니다. 이번달은 ${selectedCustomers.length}건의 ${serviceType} 제작건이 있었습니다. 최종 합계금액은 ${totalAmount.toLocaleString()}원이며 입금계좌는 아래와 같습니다.
-
-국민은행 이용현 781601-00-231766 ${totalAmount.toLocaleString()}원
-
+        const message = `안녕하세요😁
+건별 정산내용 보내드립니다!
+이번달은 ${selectedCustomers.length}건의 ${serviceType} 제작건이 있었습니다. 
+최종 합계금액은 ${totalAmount.toLocaleString()}원이며 입금계좌는 아래와 같습니다.
 상세내역:
 ${selectedCustomers.map((customer) => 
   `${formatCustomerName(customer)}`
-).join('\n')}`;
+).join('\n')}
+국민은행 이용현 781601-00-231766 으로
+합계금액 ${totalAmount.toLocaleString()}원을 입금 요청드립니다.
+오늘 하루도 행복만 가득하세요!`;
 
         messageList.push({
           couponCode: couponCode,
@@ -385,15 +498,39 @@ ${selectedCustomers.map((customer) =>
     setCurrentStep(5);
   };
 
+  // 정산 내역을 텍스트 파일로 다운로드
+  const downloadSettlement = () => {
+    let content = `정산 내역 - ${selectedMonth}\n`;
+    content += `=`.repeat(50) + '\n\n';
+    
+    messages.forEach(msg => {
+      content += `업체: ${msg.couponCode}\n`;
+      content += `건수: ${msg.totalCount}건\n`;
+      content += `금액: ${msg.totalAmount.toLocaleString()}원\n`;
+      content += `\n메시지 내용:\n`;
+      content += `-`.repeat(30) + '\n';
+      content += msg.message + '\n';
+      content += `=`.repeat(50) + '\n\n';
+    });
+    
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `정산내역_${selectedMonth}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const getSystemTitle = () => {
-    if (fileType === 'wedding') return '웨딩 정산 알림톡 시스템';
-    if (fileType === 'doljabi') return '쿠폰 정산 알림톡 시스템';
-    return '정산 알림톡 시스템';
+    if (fileType === 'wedding') return '웨딩 정산 관리 시스템';
+    if (fileType === 'doljabi') return '쿠폰 정산 관리 시스템';
+    return '정산 관리 시스템';
   };
 
   const getSystemIcon = () => {
     if (fileType === 'wedding') return <Heart className="w-8 h-8 text-white" />;
-    return <Send className="w-8 h-8 text-white" />;
+    return <CreditCard className="w-8 h-8 text-white" />;
   };
 
   const getSystemColor = () => {
@@ -401,7 +538,7 @@ ${selectedCustomers.map((customer) =>
     return 'from-blue-600 to-indigo-600';
   };
 
-  const stepNames = ['기간 설정', '쿠폰 선택', '중복 확인', '최종 검토', '메시지 발송'];
+  const stepNames = ['기간 설정', '쿠폰 선택', '중복 확인', '최종 검토', '완료'];
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
@@ -415,7 +552,7 @@ ${selectedCustomers.map((customer) =>
             {getSystemTitle()}
           </h1>
           <p className="text-gray-600 text-lg">
-            {fileType === 'wedding' ? '완벽한 웨딩 정산 메시지 발송' : '간편하고 정확한 정산 메시지 발송'}
+            {fileType === 'wedding' ? '완벽한 웨딩 정산 관리' : '간편하고 정확한 정산 관리'}
           </p>
           {fileType && (
             <div className={`inline-flex items-center gap-2 mt-2 px-4 py-2 rounded-full text-sm font-medium ${
@@ -423,13 +560,47 @@ ${selectedCustomers.map((customer) =>
                 ? 'bg-pink-100 text-pink-700' 
                 : 'bg-blue-100 text-blue-700'
             }`}>
-              {fileType === 'wedding' ? <Heart className="w-4 h-4" /> : <Send className="w-4 h-4" />}
+              {fileType === 'wedding' ? <Heart className="w-4 h-4" /> : <CreditCard className="w-4 h-4" />}
               {fileType === 'wedding' ? '웨딩 파일' : '돌잔치 파일'} 자동 감지됨
             </div>
           )}
         </div>
 
-        {/* 파일 업로드 섹션 */}
+        {/* Firebase 설정 상태 표시 */}
+        <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-6 mb-8 shadow-xl border border-white/20">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-gradient-to-r from-orange-100 to-red-100 rounded-xl flex items-center justify-center">
+                <Database className="w-6 h-6 text-orange-600" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-gray-800">Firebase 데이터베이스</h3>
+                <div className="flex items-center gap-4 text-sm">
+                  <span className={`flex items-center gap-2 ${firebaseConfig.apiKey ? 'text-green-600' : 'text-red-600'}`}>
+                    <div className={`w-2 h-2 rounded-full ${firebaseConfig.apiKey ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                    API 키 {firebaseConfig.apiKey ? '설정됨' : '미설정'}
+                  </span>
+                  <span className={`flex items-center gap-2 ${firebaseConfig.projectId ? 'text-green-600' : 'text-red-600'}`}>
+                    <div className={`w-2 h-2 rounded-full ${firebaseConfig.projectId ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                    프로젝트 {firebaseConfig.projectId ? '설정됨' : '미설정'}
+                  </span>
+                </div>
+                {!firebaseConfig.apiKey && (
+                  <div className="text-xs text-gray-500 mt-1">
+                    .env 파일에 Firebase 설정을 추가하세요
+                  </div>
+                )}
+              </div>
+            </div>
+            
+            <div className="text-right">
+              <div className="text-sm text-gray-600 mb-1">데이터 저장</div>
+              <div className="font-mono text-xs bg-gray-100 px-2 py-1 rounded">
+                {firebaseConfig.apiKey ? 'settlements 컬렉션' : '미설정'}
+              </div>
+            </div>
+          </div>
+        </div>
         <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-6 mb-8 shadow-xl border border-white/20">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
@@ -728,7 +899,7 @@ ${selectedCustomers.map((customer) =>
           </div>
         )}
 
-        {/* 4단계와 5단계는 기존 코드와 동일하지만 색상만 조정 */}
+        {/* 4단계: 중복 확인 및 최종 선택 */}
         {currentStep === 4 && isFileUploaded && (
           <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-8 shadow-xl border border-white/20">
             <div className="flex items-center justify-between mb-6">
@@ -791,7 +962,7 @@ ${selectedCustomers.map((customer) =>
               </div>
             </div>
 
-            {/* 중복 표시 및 전체 리스트는 기존과 동일 */}
+            {/* 고객 목록 */}
             <div className="space-y-6 mb-8 max-h-96 overflow-y-auto">
               {Object.keys(finalList).map(couponCode => {
                 const selectedCount = finalList[couponCode].customers.filter(c => selectedItems[c.id]).length;
@@ -929,75 +1100,80 @@ ${selectedCustomers.map((customer) =>
                 className={`px-8 py-3 bg-gradient-to-r ${fileType === 'wedding' ? 'from-rose-600 to-pink-600 hover:from-rose-700 hover:to-pink-700' : 'from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700'} text-white font-semibold rounded-xl disabled:from-gray-300 disabled:to-gray-400 transition-all duration-200 flex items-center gap-2 shadow-lg hover:shadow-xl disabled:shadow-none transform hover:scale-105 disabled:scale-100`}
               >
                 <Eye className="w-4 h-4" />
-                <span>알림톡 생성</span>
+                <span>정산 내역 생성</span>
               </button>
             </div>
           </div>
         )}
 
-        {/* 5단계: 알림톡 메시지 확인 및 발송 */}
+        {/* 5단계: 정산 내역 확인 */}
         {currentStep === 5 && isFileUploaded && (
           <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-8 shadow-xl border border-white/20">
             <div className="flex items-center mb-6">
               <div className={`w-12 h-12 bg-gradient-to-r ${fileType === 'wedding' ? 'from-pink-100 to-rose-100' : 'from-green-100 to-emerald-100'} rounded-xl flex items-center justify-center mr-4`}>
-                <Send className={`w-6 h-6 ${fileType === 'wedding' ? 'text-pink-600' : 'text-green-600'}`} />
+                <Check className={`w-6 h-6 ${fileType === 'wedding' ? 'text-pink-600' : 'text-green-600'}`} />
               </div>
               <div>
-                <h2 className="text-2xl font-bold text-gray-800">메시지 발송</h2>
-                <p className="text-gray-600">생성된 알림톡 메시지를 확인하고 발송하세요</p>
+                <h2 className="text-2xl font-bold text-gray-800">정산 내역 완료</h2>
+                <p className="text-gray-600">생성된 정산 내역을 확인하고 다운로드하세요</p>
               </div>
             </div>
             
-            {!isApproved ? (
-              <>
-                <div className="space-y-6 mb-8 max-h-96 overflow-y-auto">
-                  {messages.map((msg, idx) => (
-                    <div key={idx} className="bg-gradient-to-r from-white to-gray-50 rounded-2xl p-6 shadow-lg border border-gray-200">
-                      <div className="flex justify-between items-center mb-4">
-                        <h3 className="text-xl font-bold text-gray-800">{msg.couponCode}</h3>
-                        <div className={`bg-gradient-to-r ${fileType === 'wedding' ? 'from-pink-500 to-rose-600' : 'from-green-500 to-emerald-600'} text-white px-4 py-2 rounded-xl font-bold`}>
-                          {msg.totalCount}건 / {msg.totalAmount.toLocaleString()}원
-                        </div>
-                      </div>
-                      <div className="bg-gray-50 rounded-xl p-4 font-mono text-sm whitespace-pre-line text-gray-700 border border-gray-200">
-                        {msg.message}
-                      </div>
+            <div className="space-y-6 mb-8 max-h-96 overflow-y-auto">
+              {messages.map((msg, idx) => (
+                <div key={idx} className="bg-gradient-to-r from-white to-gray-50 rounded-2xl p-6 shadow-lg border border-gray-200">
+                  <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-xl font-bold text-gray-800">{msg.couponCode}</h3>
+                    <div className={`bg-gradient-to-r ${fileType === 'wedding' ? 'from-pink-500 to-rose-600' : 'from-green-500 to-emerald-600'} text-white px-4 py-2 rounded-xl font-bold`}>
+                      {msg.totalCount}건 / {msg.totalAmount.toLocaleString()}원
                     </div>
-                  ))}
+                  </div>
+                  <div className="bg-gray-50 rounded-xl p-4 font-mono text-sm whitespace-pre-line text-gray-700 border border-gray-200">
+                    {msg.message}
+                  </div>
                 </div>
+              ))}
+            </div>
+            
+            <div className={`bg-gradient-to-r ${fileType === 'wedding' ? 'from-pink-50 to-rose-50' : 'from-green-50 to-emerald-50'} rounded-2xl p-6 flex justify-between items-center`}>
+              <button
+                onClick={goToPreviousStep}
+                className="px-6 py-3 bg-white border border-gray-300 text-gray-700 font-semibold rounded-xl hover:bg-gray-50 transition-all duration-200 flex items-center gap-2 shadow-sm hover:shadow-md"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span>이전 단계</span>
+              </button>
+              
+              <div className="flex gap-4">
+                <button
+                  onClick={downloadSettlement}
+                  className={`px-8 py-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold rounded-2xl transition-all duration-200 flex items-center gap-3 shadow-lg hover:shadow-xl transform hover:scale-105`}
+                >
+                  <Download className="w-5 h-5" />
+                  <span>파일 다운로드</span>
+                </button>
                 
-                <div className={`bg-gradient-to-r ${fileType === 'wedding' ? 'from-pink-50 to-rose-50' : 'from-green-50 to-emerald-50'} rounded-2xl p-6 flex justify-between items-center`}>
-                  <button
-                    onClick={goToPreviousStep}
-                    className="px-6 py-3 bg-white border border-gray-300 text-gray-700 font-semibold rounded-xl hover:bg-gray-50 transition-all duration-200 flex items-center gap-2 shadow-sm hover:shadow-md"
-                  >
-                    <ArrowLeft className="w-4 h-4" />
-                    <span>이전 단계</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => setIsApproved(true)}
-                    className={`px-12 py-4 bg-gradient-to-r ${fileType === 'wedding' ? 'from-pink-600 to-rose-600 hover:from-pink-700 hover:to-rose-700' : 'from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700'} text-white font-bold text-lg rounded-2xl transition-all duration-200 flex items-center gap-3 shadow-xl hover:shadow-2xl transform hover:scale-105`}
-                  >
-                    <Check className="w-6 h-6" />
-                    <span>최종 승인 및 발송</span>
-                  </button>
-                </div>
-              </>
-            ) : (
-              <div className="text-center py-16">
-                <div className={`w-24 h-24 bg-gradient-to-r ${fileType === 'wedding' ? 'from-pink-400 to-rose-500' : 'from-green-400 to-emerald-500'} rounded-full flex items-center justify-center mx-auto mb-6 shadow-2xl animate-pulse`}>
-                  <Check className="w-12 h-12 text-white" />
-                </div>
-                <h3 className={`text-4xl font-bold ${fileType === 'wedding' ? 'text-pink-600' : 'text-green-600'} mb-4`}>발송 완료!</h3>
-                <p className="text-xl text-gray-600 mb-8">총 {messages.length}개 업체에 정산 알림톡이 발송되었습니다</p>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-w-4xl mx-auto">
-                  {messages.map((msg, idx) => (
-                    <div key={idx} className={`bg-gradient-to-r ${fileType === 'wedding' ? 'from-pink-100 to-rose-100 border-pink-200' : 'from-green-100 to-emerald-100 border-green-200'} p-4 rounded-2xl shadow-lg border`}>
-                      <div className={`font-bold ${fileType === 'wedding' ? 'text-pink-800' : 'text-green-800'} text-lg`}>{msg.couponCode}</div>
-                      <div className={`${fileType === 'wedding' ? 'text-pink-600' : 'text-green-600'}`}>{msg.totalCount}건 완료</div>
-                    </div>
-                  ))}
+                <button
+                  onClick={saveToFirebase}
+                  disabled={isSaving || !firebaseConfig.apiKey}
+                  className={`px-8 py-4 bg-gradient-to-r ${firebaseConfig.apiKey ? 'from-orange-600 to-red-600 hover:from-orange-700 hover:to-red-700' : 'from-gray-400 to-gray-500'} text-white font-bold rounded-2xl transition-all duration-200 flex items-center gap-3 shadow-lg hover:shadow-xl transform hover:scale-105 disabled:scale-100 disabled:shadow-none`}
+                >
+                  <Database className="w-5 h-5" />
+                  <span>{isSaving ? '저장 중...' : 'Firebase 저장'}</span>
+                </button>
+              </div>
+            </div>
+            
+            {/* 저장 상태 메시지 */}
+            {saveStatus && (
+              <div className={`mt-4 p-4 rounded-xl ${saveStatus.includes('성공') ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-red-100 text-red-800 border border-red-200'}`}>
+                <div className="flex items-center gap-2">
+                  {saveStatus.includes('성공') ? (
+                    <Check className="w-5 h-5" />
+                  ) : (
+                    <AlertCircle className="w-5 h-5" />
+                  )}
+                  <span className="font-medium">{saveStatus}</span>
                 </div>
               </div>
             )}
